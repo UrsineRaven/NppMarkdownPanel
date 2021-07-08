@@ -24,8 +24,8 @@ namespace NppMarkdownPanel.Forms
             <html>
                 <head>
                     <title>{0}</title>
-	                <meta http-equiv=""X-UA-Compatible"" content=""IE=edge""></meta>
-	                <meta http-equiv=""content-type"" content=""text/html; charset=utf-8"">
+	                <meta http-equiv=""X-UA-Compatible"" content=""IE=edge""/>
+	                <meta http-equiv=""content-type"" content=""text/html; charset=utf-8""/>
                     <style type=""text/css"">
                     {1}
                     </style>
@@ -33,7 +33,7 @@ namespace NppMarkdownPanel.Forms
                 <body style=""{2}"">
                 {3}
                 </body>
-            <html>
+            </html>
             ";
 
         private Task<string> renderTask;
@@ -41,6 +41,7 @@ namespace NppMarkdownPanel.Forms
         private int lastVerticalScroll = 0;
         private string htmlContent;
         private bool showToolbar;
+        private string currentFilePath;
 
         public string CssFileName { get; set; }
         public int ZoomLevel { get; set; }
@@ -64,6 +65,7 @@ namespace NppMarkdownPanel.Forms
 
         public void RenderMarkdown(string currentText, string filepath)
         {
+            currentFilePath = filepath;
             if (renderTask == null || renderTask.IsCompleted)
             {
                 SaveLastVerticalScrollPosition();
@@ -118,6 +120,46 @@ namespace NppMarkdownPanel.Forms
                 renderTask.Start();
             }
         }
+
+        public void RenderHtml(string currentText, string filepath)
+        {
+            if (renderTask == null || renderTask.IsCompleted)
+            {
+                SaveLastVerticalScrollPosition();
+                MakeAndDisplayScreenShot();
+
+                var context = TaskScheduler.FromCurrentSynchronizationContext();
+                renderTask = new Task<string>(() =>
+                {
+                    return currentText;
+                });
+                renderTask.ContinueWith((renderedText) =>
+                {
+                    htmlContent = renderedText.Result;
+                    if (!String.IsNullOrWhiteSpace(HtmlFileName))
+                    {
+                        bool valid = Utils.ValidateFileSelection(HtmlFileName, out string fullPath, out string error, "HTML Output");
+                        if (valid)
+                        {
+                            HtmlFileName = fullPath; // the validation was run against this path, so we want to make sure the state of the preview matches that
+                            try
+                            {
+                                File.WriteAllText(HtmlFileName, htmlContent);
+                            }
+                            catch (Exception)
+                            {
+                                // If it fails, just continue
+                            }
+                        }
+                    }
+
+                    webBrowserPreview.DocumentText = htmlContent;
+                    AdjustZoomLevel();
+                }, context);
+                renderTask.Start();
+            }
+        }
+
         /// <summary>
         /// Makes and displays a screenshot of the current browser content to prevent it from flickering 
         /// while loading updated content
@@ -162,6 +204,16 @@ namespace NppMarkdownPanel.Forms
         {
             pictureBoxScreenshot.Visible = false;
             pictureBoxScreenshot.Image = null;
+        }
+
+        public void ScrollToHtmlLineNo(double percent)
+        {
+            Application.DoEvents();
+            if (webBrowserPreview.Document != null)
+            {
+                int position = (int)(webBrowserPreview.Document.Body.ScrollRectangle.Height * percent);
+                webBrowserPreview.Document.Window.ScrollTo(0, position);
+            }
         }
 
         public void ScrollToElementWithLineNo(int lineNo)
@@ -275,6 +327,11 @@ namespace NppMarkdownPanel.Forms
             }
         }
 
+        private void webBrowserPreview_StatusTextChanged(object sender, EventArgs e)
+        {
+            toolStripStatusLabel1.Text = webBrowserPreview.StatusText;
+        }
+
         private async void btnSaveHtml_Click(object sender, EventArgs e)
         {
             using (SaveFileDialog saveFileDialog = new SaveFileDialog())
@@ -282,6 +339,8 @@ namespace NppMarkdownPanel.Forms
                 Stream myStream;
                 saveFileDialog.Filter = "html files (*.html, *.htm)|*.html;*.htm|All files (*.*)|*.*";
                 saveFileDialog.RestoreDirectory = true;
+                saveFileDialog.InitialDirectory = Path.GetDirectoryName(currentFilePath);
+                saveFileDialog.FileName = Path.GetFileNameWithoutExtension(currentFilePath);
                 if (saveFileDialog.ShowDialog() == DialogResult.OK)
                 {
                     if ((myStream = saveFileDialog.OpenFile()) != null)

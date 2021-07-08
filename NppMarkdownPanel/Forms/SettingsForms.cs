@@ -15,19 +15,25 @@ namespace NppMarkdownPanel.Forms
         public int ZoomLevel { get; set; }
         public string CssFileName { get; set; }
         public string HtmlFileName { get; set; }
+        public string MkdnExtensions { get; set; }
+        public string HtmlExtensions { get; set; }
         public bool ShowToolbar { get; set; }
 
-        public SettingsForms(int zoomLevel, string cssFileName, string htmlFileName, bool showToolbar)
+        public SettingsForms(int zoomLevel, string cssFileName, string htmlFileName, bool showToolbar, string mkdnExtensions, string htmlExtensions)
         {
             ZoomLevel = zoomLevel;
             CssFileName = cssFileName;
             HtmlFileName = htmlFileName;
             ShowToolbar = showToolbar;
+            MkdnExtensions = mkdnExtensions;
+            HtmlExtensions = htmlExtensions;
             InitializeComponent();
 
             trackBar1.Value = zoomLevel;
             tbCssFile.Text = cssFileName;
             tbHtmlFile.Text = htmlFileName;
+            tbMkdnExts.Text = mkdnExtensions;
+            tbHtmlExts.Text = htmlExtensions;
             cbShowToolbar.Checked = showToolbar;
         }
 
@@ -40,6 +46,26 @@ namespace NppMarkdownPanel.Forms
         private void tbCssFile_TextChanged(object sender, EventArgs e)
         {
             CssFileName = tbCssFile.Text;
+        }
+
+        private void tbMkdnExts_TextChanged(object sender, EventArgs e)
+        {
+            MkdnExtensions = tbMkdnExts.Text;
+        }
+
+        private void btnResetMkdnExts_Click(object sender, EventArgs e)
+        {
+            tbMkdnExts.Text = ".md,.mkdn,.mkd";
+        }
+
+        private void tbHtmlExts_TextChanged(object sender, EventArgs e)
+        {
+            HtmlExtensions = tbHtmlExts.Text;
+        }
+
+        private void btnResetHtmlExts_Click(object sender, EventArgs e)
+        {
+            tbHtmlExts.Text = ".html,.htm";
         }
 
         private void btnSave_Click(object sender, EventArgs e)
@@ -78,9 +104,9 @@ namespace NppMarkdownPanel.Forms
             }
         }
 
-        private void button1_Click(object sender, EventArgs e)
+        private void btnResetCss_Click(object sender, EventArgs e)
         {
-            tbCssFile.Text = "";
+            tbCssFile.Text = "style.css";
         }
 
         #region Output HTML File

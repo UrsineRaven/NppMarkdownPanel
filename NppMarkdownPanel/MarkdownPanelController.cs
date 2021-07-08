@@ -2,6 +2,7 @@
 using NppMarkdownPanel.Forms;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -34,7 +35,16 @@ namespace NppMarkdownPanel
         private readonly INotepadPPGateway notepadPPGateway;
         private int lastCaretPosition;
         private string iniFilePath;
+        private string MkdnExtensions;
+        private string HtmlExtensions;
         private bool syncViewWithCaretPosition;
+        private bool syncViewWithScrollPosition;
+
+        private const int FILTERS = 10;
+        private string[] filterExts = new string[FILTERS];
+        private string[] filterProgs = new string[FILTERS];
+        private string[] filterArgs = new string[FILTERS];
+        private int filterFound = 0;
 
         public MarkdownPanelController()
         {
@@ -52,29 +62,116 @@ namespace NppMarkdownPanel
             {
                 if (notification.Header.Code == (uint)SciMsg.SCN_UPDATEUI)
                 {
+                    if ( ! (ValidateMkdnExtension() || ValidateHtmlExtension()) )
+                        return;
+
+                    var firstVisible = scintillaGateway.GetFirstVisibleLine();
+                    var buffer = scintillaGateway.LinesOnScreen()/2;
+                    var lastLine = scintillaGateway.GetLineCount();
+
                     if (syncViewWithCaretPosition && lastCaretPosition != scintillaGateway.GetCurrentPos().Value)
                     {
                         lastCaretPosition = scintillaGateway.GetCurrentPos().Value;
-                        ScrollToElementAtLineNo(scintillaGateway.GetCurrentLineNumber());
+                        if ((scintillaGateway.GetCurrentLineNumber() - buffer) < 0)
+                        {
+                            ScrollToElementAtLineNo(0);
+                        }
+                        else
+                        {
+                            ScrollToElementAtLineNo(scintillaGateway.GetCurrentLineNumber() - buffer);
+                        }
+                    }
+                    else if (syncViewWithScrollPosition && lastCaretPosition != scintillaGateway.GetFirstVisibleLine())
+                    {
+                        lastCaretPosition = scintillaGateway.GetFirstVisibleLine();
+                        var middleLine = lastCaretPosition + buffer;
+                        if (scintillaGateway.GetFirstVisibleLine() == 0)
+                        {
+                            ScrollToElementAtLineNo(0);
+                        }
+                        else if ((lastCaretPosition + scintillaGateway.LinesOnScreen()) >= lastLine)
+                        {
+                            ScrollToElementAtLineNo(lastLine);
+                        }
+                        else
+                        {
+                            ScrollToElementAtLineNo(middleLine - buffer);
+                        }
                     }
                 }
-                else
-                if (notification.Header.Code == (uint)NppMsg.NPPN_BUFFERACTIVATED)
+                else if (notification.Header.Code == (uint)NppMsg.NPPN_BUFFERACTIVATED)
                 {
+                    UpdateEditorInformation();
                     RenderMarkdown();
                 }
                 else if (notification.Header.Code == (uint)SciMsg.SCN_MODIFIED)
                 {
-                    bool isInsert = (notification.ModificationType & (uint)SciMsg.SC_MOD_INSERTTEXT) != 0;
-                    bool isDelete = (notification.ModificationType & (uint)SciMsg.SC_MOD_DELETETEXT) != 0;
-                    // Any modifications made ?
-                    if (isInsert || isDelete)
+                    // bool isInsert = (notification.ModificationType & (uint)SciMsg.SC_MOD_INSERTTEXT) != 0;
+                    // bool isDelete = (notification.ModificationType & (uint)SciMsg.SC_MOD_DELETETEXT) != 0;
+                    // // Any modifications made ?
+                    // if (isInsert || isDelete)
+                    // {
+                    if ( ValidateMkdnExtension() || ValidateHtmlExtension() )
                     {
                         lastTickCount = Environment.TickCount;
                         RenderMarkdown();
                     }
+                    // }
+                }
+                else if (notification.Header.Code == (uint)NppMsg.NPPN_FILESAVED)
+                {
+                    RenderMarkdown();
                 }
             }
+        }
+
+        private bool ValidateMkdnExtension()
+        {
+            StringBuilder sbFileExtension = new StringBuilder(Win32.MAX_PATH);
+            Win32.SendMessage(PluginBase.nppData._nppHandle, (uint)NppMsg.NPPM_GETEXTPART, Win32.MAX_PATH, sbFileExtension);
+            var fileExtension = sbFileExtension.ToString();
+            if ( String.IsNullOrEmpty(fileExtension) )
+                return false;
+
+            if (MkdnExtensions.ToLower().Contains(fileExtension.ToLower()))
+                return true;
+            else
+                return false;
+        }
+
+        private bool ValidateHtmlExtension()
+        {
+            StringBuilder sbFileExtension = new StringBuilder(Win32.MAX_PATH);
+            Win32.SendMessage(PluginBase.nppData._nppHandle, (uint)NppMsg.NPPM_GETEXTPART, Win32.MAX_PATH, sbFileExtension);
+            var fileExtension = sbFileExtension.ToString();
+            if ( String.IsNullOrEmpty(fileExtension) )
+                return false;
+
+            if (HtmlExtensions.ToLower().Contains(fileExtension.ToLower()))
+                return true;
+            else
+                return false;
+        }
+
+        private int ValidateFilterExtension()
+        {
+            StringBuilder sbFileExtension = new StringBuilder(Win32.MAX_PATH);
+            Win32.SendMessage(PluginBase.nppData._nppHandle, (uint)NppMsg.NPPM_GETEXTPART, Win32.MAX_PATH, sbFileExtension);
+            var fileExtension = sbFileExtension.ToString();
+            if ( String.IsNullOrEmpty(fileExtension) )
+                return -1;
+
+            for ( int i = 0; i < filterFound; i++ )
+            {
+                if (filterExts[i].Contains(fileExtension.ToLower()))
+                    return i;
+            }
+            return -1;
+        }
+
+        protected void UpdateEditorInformation()
+        {
+            scintillaGateway.SetScintillaHandle(PluginBase.GetCurrentScintilla());
         }
 
         private void RenderMarkdown()
@@ -95,7 +192,37 @@ namespace NppMarkdownPanel
             renderTimer.Stop();
             try
             {
-                markdownPreviewForm.RenderMarkdown(GetCurrentEditorText(), notepadPPGateway.GetCurrentFilePath());
+                if (ValidateMkdnExtension())
+                    markdownPreviewForm.RenderMarkdown(GetCurrentEditorText(), notepadPPGateway.GetCurrentFilePath());
+                else if (ValidateHtmlExtension())
+                    markdownPreviewForm.RenderHtml(GetCurrentEditorText(), notepadPPGateway.GetCurrentFilePath());
+                else
+                {
+                    int filter = ValidateFilterExtension();
+                    if ( filter >= 0 )
+                    {
+                        var filterProgram = filterProgs[filter];
+                        var filterArguments = filterArgs[filter];
+                        var process = new Process
+                        {
+                            StartInfo = new ProcessStartInfo
+                            {
+                                FileName = filterProgram,
+                                Arguments = $"{filterArguments} \"{notepadPPGateway.GetCurrentFilePath()}\"",
+                                UseShellExecute = false,
+                                RedirectStandardOutput = true,
+                                CreateNoWindow = true
+                            }
+                        };
+
+                        process.Start();
+                        string data = process.StandardOutput.ReadToEnd();
+                        process.WaitForExit();
+                        markdownPreviewForm.RenderHtml(data, notepadPPGateway.GetCurrentFilePath());
+                    }
+                    else
+                        markdownPreviewForm.RenderMarkdown($"Not a valid Markdown file extension: {MkdnExtensions}\n\nNot a valid HTML file extension: {HtmlExtensions}", notepadPPGateway.GetCurrentFilePath());
+                }
             }
             catch 
             {
@@ -109,35 +236,62 @@ namespace NppMarkdownPanel
 
         private void ScrollToElementAtLineNo(int lineNo)
         {
-            markdownPreviewForm.ScrollToElementWithLineNo(lineNo);
+            if ( ValidateMkdnExtension() )
+                markdownPreviewForm.ScrollToElementWithLineNo(lineNo);
+            else
+            {
+                var lastLine = scintillaGateway.GetLineCount();
+                double percent = (double)lineNo / lastLine;
+                markdownPreviewForm.ScrollToHtmlLineNo(percent);
+            }
         }
 
         public void InitCommandMenu()
         {
             SetIniFilePath();
             syncViewWithCaretPosition = (Win32.GetPrivateProfileInt("Options", "SyncViewWithCaretPosition", 0, iniFilePath) != 0);
+            syncViewWithScrollPosition = (Win32.GetPrivateProfileInt("Options", "SyncViewWithScrollPosition", 0, iniFilePath) != 0);
             markdownPreviewForm.CssFileName = Win32.ReadIniValue("Options", "CssFileName", iniFilePath, "style.css");
-            markdownPreviewForm.ZoomLevel = Win32.GetPrivateProfileInt("Options", "ZoomLevel", 130, iniFilePath);
+            markdownPreviewForm.ZoomLevel = Win32.GetPrivateProfileInt("Options", "ZoomLevel", 100, iniFilePath);
+            MkdnExtensions = Win32.ReadIniValue("Options", "MkdnExtensions", iniFilePath, ".md,.mkdn,.mkd");
+            HtmlExtensions = Win32.ReadIniValue("Options", "HtmlExtensions", iniFilePath, ".html,.htm");
             markdownPreviewForm.HtmlFileName = Win32.ReadIniValue("Options", "HtmlFileName", iniFilePath);
             markdownPreviewForm.ShowToolbar = Utils.ReadIniBool("Options", "ShowToolbar", iniFilePath);
-            PluginBase.SetCommand(0, "About", ShowAboutDialog, new ShortcutKey(false, false, false, Keys.None));
-            PluginBase.SetCommand(1, "Toggle Markdown Panel", TogglePanelVisible);
-            PluginBase.SetCommand(2, "Synchronize viewer with caret position", SyncViewWithCaret, syncViewWithCaretPosition);
-            PluginBase.SetCommand(3, "Edit Settings", EditSettings);
 
-            idMyDlg = 1;
+            for ( int i = 0; i < FILTERS; i++ )
+            {
+                var section = $"Filter{i}";
+                filterExts[i]  = Win32.ReadIniValue(section, "Extensions", iniFilePath, "!!!");
+                filterProgs[i] = Win32.ReadIniValue(section, "Program", iniFilePath, "!!!");
+                filterArgs[i]  = Win32.ReadIniValue(section, "Arguments", iniFilePath, "!!!");
+                if ( filterExts[i].Contains("!!!") )
+                    break;
+                filterFound++;
+            }
+
+            PluginBase.SetCommand(0, "Toggle &Markdown Panel", TogglePanelVisible);
+            PluginBase.SetCommand(1, "---", null);
+            PluginBase.SetCommand(2, "Synchronize with &caret position", SyncViewWithCaret, syncViewWithCaretPosition);
+            PluginBase.SetCommand(3, "Synchronize on &vertical scroll", SyncViewWithScroll, syncViewWithScrollPosition);
+            PluginBase.SetCommand(4, "---", null);
+            PluginBase.SetCommand(5, "&Settings", EditSettings);
+            PluginBase.SetCommand(6, "&About", ShowAboutDialog, new ShortcutKey(false, false, false, Keys.None));
+
+            idMyDlg = 0;
         }
 
 
         private void EditSettings()
         {
-            var settingsForm = new SettingsForms(markdownPreviewForm.ZoomLevel, markdownPreviewForm.CssFileName, markdownPreviewForm.HtmlFileName, markdownPreviewForm.ShowToolbar);
+            var settingsForm = new SettingsForms(markdownPreviewForm.ZoomLevel, markdownPreviewForm.CssFileName, markdownPreviewForm.HtmlFileName, markdownPreviewForm.ShowToolbar, MkdnExtensions, HtmlExtensions);
             if (settingsForm.ShowDialog() == DialogResult.OK)
             {
                 markdownPreviewForm.CssFileName = settingsForm.CssFileName;
                 markdownPreviewForm.ZoomLevel = settingsForm.ZoomLevel;
                 markdownPreviewForm.HtmlFileName = settingsForm.HtmlFileName;
                 markdownPreviewForm.ShowToolbar = settingsForm.ShowToolbar;
+                MkdnExtensions = settingsForm.MkdnExtensions;
+                HtmlExtensions = settingsForm.HtmlExtensions;
                 SaveSettings();
                 //Update Preview
                 RenderMarkdown();
@@ -156,8 +310,19 @@ namespace NppMarkdownPanel
         private void SyncViewWithCaret()
         {
             syncViewWithCaretPosition = !syncViewWithCaretPosition;
-            Win32.CheckMenuItem(Win32.GetMenu(PluginBase.nppData._nppHandle), PluginBase._funcItems.Items[2]._cmdID, Win32.MF_BYCOMMAND | (syncViewWithCaretPosition ? Win32.MF_CHECKED : Win32.MF_UNCHECKED));
+            syncViewWithScrollPosition = false;
+            Win32.CheckMenuItem(Win32.GetMenu(PluginBase.nppData._nppHandle), PluginBase._funcItems.Items[2]._cmdID, Win32.MF_BYCOMMAND | (syncViewWithScrollPosition ? Win32.MF_CHECKED : Win32.MF_UNCHECKED));
+            Win32.CheckMenuItem(Win32.GetMenu(PluginBase.nppData._nppHandle), PluginBase._funcItems.Items[1]._cmdID, Win32.MF_BYCOMMAND | (syncViewWithCaretPosition ? Win32.MF_CHECKED : Win32.MF_UNCHECKED));
             if (syncViewWithCaretPosition) ScrollToElementAtLineNo(scintillaGateway.GetCurrentLineNumber());
+        }
+
+        private void SyncViewWithScroll()
+        {
+            syncViewWithScrollPosition = !syncViewWithScrollPosition;
+            syncViewWithCaretPosition = false;
+            Win32.CheckMenuItem(Win32.GetMenu(PluginBase.nppData._nppHandle), PluginBase._funcItems.Items[1]._cmdID, Win32.MF_BYCOMMAND | (syncViewWithCaretPosition ? Win32.MF_CHECKED : Win32.MF_UNCHECKED));
+            Win32.CheckMenuItem(Win32.GetMenu(PluginBase.nppData._nppHandle), PluginBase._funcItems.Items[2]._cmdID, Win32.MF_BYCOMMAND | (syncViewWithScrollPosition ? Win32.MF_CHECKED : Win32.MF_UNCHECKED));
+            if (syncViewWithScrollPosition) ScrollToElementAtLineNo(scintillaGateway.GetFirstVisibleLine());
         }
 
         public void SetToolBarIcon()
@@ -173,6 +338,9 @@ namespace NppMarkdownPanel
         public void PluginCleanUp()
         {
             Win32.WritePrivateProfileString("Options", "SyncViewWithCaretPosition", syncViewWithCaretPosition ? "1" : "0", iniFilePath);
+            Win32.WritePrivateProfileString("Options", "SyncViewWithScrollPosition", syncViewWithScrollPosition ? "1" : "0", iniFilePath);
+            Win32.WriteIniValue("Options", "MkdnExtensions", MkdnExtensions.ToString(), iniFilePath);
+            Win32.WriteIniValue("Options", "HtmlExtensions", HtmlExtensions.ToString(), iniFilePath);
             SaveSettings();
         }
 
@@ -216,7 +384,10 @@ namespace NppMarkdownPanel
             }
             isPanelVisible = !isPanelVisible;
             if (isPanelVisible)
+            {
+                UpdateEditorInformation();
                 RenderMarkdown();
+            }
         }
 
         private Icon ConvertBitmapToIcon(Bitmap bitmapImage)
